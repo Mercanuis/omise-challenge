@@ -1,0 +1,1090 @@
+Index: service/doc.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- service/doc.go	(date 1606697621452)
++++ service/doc.go	(date 1606697621452)
+@@ -0,0 +1,15 @@
++// Package service contains functions that handle the main business logic
++//
++// service handles file processing, as well as holding structs containing the full service code.
++// The business logic handles the process like a batch job; this is a process meant to be handled during low
++// usage hours. The reasoning for this is the nature of handling a large file and processing it makes it seem to be a batch job
++//
++// Optimization can still be done, but things like usage of asynchronous functions or goroutines were not prioritized over code correctness, and code organization.
++// The reason for this is that batch jobs are usually approached with a sense of utilizing resources during off-hours for a business, allowing things
++// to take the time to get things processed correctly
++//
++// summary handles process summarization, handling the total amount of donations, and failed donations
++// Data for the summary, such as average donations, and top donors, are based only on successful donations.
++// The reasoning for this is that it does not make sense to handle data for failed or invalid donations and to use them
++// as a measure for the total overall (i.e. A top donor should never be from a failed donation)
++package service
+Index: cmd/encrypt/encrypt.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- cmd/encrypt/encrypt.go	(date 1606346708622)
++++ cmd/encrypt/encrypt.go	(date 1606346708622)
+@@ -0,0 +1,12 @@
++package main
++
++import (
++	"os"
++
++	"go-tamboom/service"
++)
++
++func main() {
++	s := service.NewChargerService(os.Args[1])
++	s.MakeDecipherText()
++}
+Index: service/service_test.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- service/service_test.go	(date 1606698609120)
++++ service/service_test.go	(date 1606698609120)
+@@ -0,0 +1,35 @@
++package service
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/require"
++	"go-tamboom/http"
++)
++
++func TestChargerService_ProcessDonationRecords(t *testing.T) {
++	records := make([][]string, 0)
++	records = append(records, []string{"Name", "AmountSubunits", "CCNumber", "CVV", "ExpMonth", "ExpYear"})
++	records = append(records, []string{"Mr. Grossman R Oldbuck", "2879410", "5375543637862918", "488", "11", "2021"})
++	records = append(records, []string{"Mr. Ferdinand H Took-Brandybuck", "2253551", "5238569266360327", "052", "11", "2019"})
++	records = append(records, []string{"Ms. Estella R Boffin", "1245821", "4556490107025705", "653", "11", "2020"})
++	records = append(records, []string{"Mrs. Camelia G Took", "110051", "5320073142514321", "998", "4", "2022"})
++	records = append(records, []string{"Ms. Daisy C Tûk", "2213937", "4556712499523363", "814", "5", "2022"})
++	records = append(records, []string{"Ms. Primrose F Smallburrow", "4267320", "5426958001804693", "140", "6", "2023"})
++	records = append(records, []string{"Mrs. Esmeralda M Button", "3069758", "5243405935045374", "767", "10", "2020"})
++
++	api, err := http.NewOmise()
++	require.NoError(t, err)
++
++	c := ChargerService{
++		fileName: "blah",
++		decrypt:  nil,
++		encrypt:  nil,
++		api:      api,
++	}
++
++	summary := c.processDonationRecords(records)
++	require.Equal(t, int64(16039848), summary.total)
++	require.Equal(t, int64(5323309), summary.failures)
++	require.Equal(t, 5, len(summary.successes))
++}
+Index: http/omise.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- http/omise.go	(date 1606698609123)
++++ http/omise.go	(date 1606698609123)
+@@ -0,0 +1,73 @@
++package http
++
++import (
++	"github.com/omise/omise-go"
++	"github.com/omise/omise-go/operations"
++	"go-tamboom/model"
++)
++
++const (
++	// Read these from environment variables or configuration files!
++	// Since this is a test and not meant for any commercial use, we'll just use these
++	OmisePublicKey = "pkey_test_5m1gc72exlp41sox2ql"
++	OmiseSecretKey = "skey_test_5m1gc72f5zdltcw8t68"
++	JPY            = "jpy"
++	Tokyo          = "Tokyo"
++	ZipCode        = "1100001"
++)
++
++// API describes a series of api call functions
++type API interface {
++	//CreateCard creates a new Card on the Omise API, returns an error should something fail during the call
++	CreateCard(model.Donation) (*omise.Card, error)
++	//CreateCharge creates a new Charge on the Omise API, returns an error should something fail during the call
++	CreateCharge(model.Donation, *omise.Card) (*omise.Charge, error)
++}
++
++// Omise is a struct, used to store the Omise Client
++type Omise struct {
++	client *omise.Client
++}
++
++// NewOmise returns a new Omise
++func NewOmise() (API, error) {
++	c, err := omise.NewClient(OmisePublicKey, OmiseSecretKey)
++	if err != nil {
++		return nil, err
++	}
++
++	return &Omise{
++		client: c,
++	}, nil
++}
++
++func (o *Omise) CreateCard(donation model.Donation) (*omise.Card, error) {
++	card, createToken := &omise.Card{}, &operations.CreateToken{
++		Name:            donation.Name,
++		Number:          donation.CCNumber,
++		ExpirationMonth: donation.ExpirationMonth,
++		ExpirationYear:  donation.ExpirationYear,
++
++		City:         Tokyo,
++		PostalCode:   ZipCode,
++		SecurityCode: donation.CVV,
++	}
++
++	if e := o.client.Do(card, createToken); e != nil {
++		return nil, e
++	}
++
++	return card, nil
++}
++
++func (o *Omise) CreateCharge(donation model.Donation, card *omise.Card) (*omise.Charge, error) {
++	charge, createCharge := &omise.Charge{}, &operations.CreateCharge{
++		Amount:   donation.AmountSubunits,
++		Currency: JPY,
++		Card:     card.ID,
++	}
++	if e := o.client.Do(charge, createCharge); e != nil {
++		return nil, e
++	}
++	return charge, nil
++}
+Index: go-tamboom.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- go-tamboom.go	(date 1606698609113)
++++ go-tamboom.go	(date 1606698609113)
+@@ -0,0 +1,18 @@
++//Package main contains the main entry point
++//This file is meant to be run with the following command
++//
++//    ./go-tamboom <file_name>
++//where <file_name> is a 128 encrypted file
++//This process is treated like a batch job: errors are logged, but the application should not crash, or if it does, can be re-ran
++package main
++
++import (
++	"os"
++
++	"go-tamboom/service"
++)
++
++func main() {
++	s := service.NewChargerService(os.Args[1])
++	s.ProcessDonations()
++}
+Index: go.mod
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- go.mod	(date 1606624060965)
++++ go.mod	(date 1606624060965)
+@@ -0,0 +1,8 @@
++module go-tamboom
++
++go 1.15
++
++require (
++	github.com/omise/omise-go v1.0.5
++	github.com/stretchr/testify v1.6.1
++)
+Index: service/service.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- service/service.go	(date 1606698609110)
++++ service/service.go	(date 1606698609110)
+@@ -0,0 +1,107 @@
++package service
++
++import (
++	"encoding/csv"
++	"fmt"
++	"log"
++	"os"
++
++	"go-tamboom/cipher"
++	"go-tamboom/http"
++	"go-tamboom/model"
++)
++
++// Service defines a series of functions for business logic
++type Service interface {
++	// MakeDecipherText creates a 128 ciphered text file, based on the file name that is passed to the Service
++	MakeDecipherText()
++	// ProcessDonations processes a file of donations, creating Donation structs and then handling the Summary
++	ProcessDonations()
++}
++
++// ChargerService represents the main service of the application
++type ChargerService struct {
++	fileName string
++	decrypt  cipher.Decrypt
++	encrypt  cipher.Encrypt
++	api      http.API
++}
++
++// NewChargerService creates a new ChargerService, with a file to be processed
++// Should an error occur during the creation, no error will be produced
++// This is meant to play like a batch job where errors are recorded but do not stop the service
++func NewChargerService(fileName string) Service {
++	api, err := http.NewOmise()
++	if err != nil {
++		log.Print(err)
++	}
++
++	return &ChargerService{
++		fileName: fileName,
++		decrypt:  cipher.NewDecipher(fileName),
++		encrypt:  cipher.NewEncipher(fileName),
++		api:      api,
++	}
++}
++
++// ProcessDonations reads the file from the Service, and then creates calls with the API to generate a Summary
++func (c *ChargerService) ProcessDonations() {
++	fileName, err := c.decrypt.GetDecipherText()
++	if err != nil {
++		log.Fatal(err)
++	}
++
++	records := c.getRecordsFromFile(fileName)
++	fmt.Println(records)
++	log.Printf("[Service] Processing donations...\n")
++	summary := c.processDonationRecords(records)
++	log.Printf("[Service] Done.\n")
++	summary.PrintSummary()
++}
++
++func (c *ChargerService) getRecordsFromFile(fn string) [][]string {
++	data, err := os.Open(fn)
++	if err != nil {
++		log.Printf("[READER ERROR] - Couldn't read from reader: %s\n", err)
++	}
++	defer os.Remove(fn)
++
++	reader := csv.NewReader(data)
++	records, _ := reader.ReadAll()
++	return records
++}
++
++func (c *ChargerService) processDonationRecords(records [][]string) Summary {
++	summary := NewSummary()
++	for i, data := range records {
++		if i == 0 {
++			//this is the CSV header, so we don't need this, skip
++			continue
++		}
++
++		d := model.NewDonation(data[0], data[1], data[2], data[3], data[4], data[5])
++
++		card, err := c.api.CreateCard(d)
++		if err != nil {
++			log.Printf("[OMISE] Error creating card: %s\n", err)
++			summary.AddToFailure(d.AmountSubunits)
++			continue
++		}
++
++		_, err = c.api.CreateCharge(d, card)
++		if err != nil {
++			log.Printf("[OMISE] Error creating charge: %s\n", err)
++			summary.AddToFailure(d.AmountSubunits)
++			continue
++		}
++
++		summary.AddSuccess(d.Name, d.AmountSubunits)
++	}
++
++	return summary
++}
++
++// MakeDecipherText enciphers the file from the Service
++func (c *ChargerService) MakeDecipherText() {
++	c.encrypt.MakeDecipherText()
++}
+Index: service/summary_test.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- service/summary_test.go	(date 1606698609128)
++++ service/summary_test.go	(date 1606698609128)
+@@ -0,0 +1,65 @@
++package service
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/require"
++)
++
++func TestNewSummary(t *testing.T) {
++	s := NewSummary()
++
++	require.Equal(t, int64(0), s.failures)
++	require.Equal(t, int64(0), s.total)
++	require.Equal(t, 0, len(s.successes))
++}
++
++func TestSummary_AddSuccess(t *testing.T) {
++	s := NewSummary()
++
++	s.AddSuccess("Yshtola", 1000)
++
++	require.Equal(t, int64(0), s.failures)
++	require.Equal(t, int64(1000), s.summarizeSuccess())
++	require.Equal(t, "Yshtola", s.successes[0].donor)
++}
++
++func TestSummary_AddToFailure(t *testing.T) {
++	s := NewSummary()
++
++	s.AddToFailure(int64(1000))
++
++	require.Equal(t, int64(1000), s.failures)
++	require.Equal(t, int64(0), s.summarizeSuccess())
++	require.Equal(t, 0, len(s.successes))
++}
++
++func TestSummary_SummarizeSuccess(t *testing.T) {
++	s := NewSummary()
++
++	s.AddToFailure(int64(1000))
++	s.AddSuccess("Yshtola", 1000)
++	s.AddSuccess("Lyse", 2000)
++
++	require.Equal(t, int64(3000), s.summarizeSuccess())
++}
++
++func TestSummary_AverageSuccess(t *testing.T) {
++	s := NewSummary()
++
++	s.AddToFailure(int64(1000))
++	s.AddSuccess("Yshtola", 1000)
++	s.AddSuccess("Lyse", 2000)
++
++	require.Equal(t, float64(1500), s.averageSuccess())
++}
++
++func TestSummary_TopDonor(t *testing.T) {
++	s := NewSummary()
++
++	s.AddToFailure(int64(1000))
++	s.AddSuccess("Yshtola", 1000)
++	s.AddSuccess("Lyse", 2000)
++
++	require.Equal(t, "Lyse", s.topDonor())
++}
+Index: cipher/rot128.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- cipher/rot128.go	(date 1606698609131)
++++ cipher/rot128.go	(date 1606698609131)
+@@ -0,0 +1,45 @@
++package cipher
++
++import (
++	"io"
++)
++
++// Rot128Reader implements io.Reader that transforms
++type Rot128Reader struct{ reader io.Reader }
++
++func NewRot128Reader(r io.Reader) (*Rot128Reader, error) {
++	return &Rot128Reader{reader: r}, nil
++}
++
++func (r *Rot128Reader) Read(p []byte) (int, error) {
++	if n, err := r.reader.Read(p); err != nil {
++		return n, err
++	} else {
++		rot128(p[:n])
++		return n, nil
++	}
++}
++
++type Rot128Writer struct {
++	writer io.Writer
++	buffer []byte // not thread-safe
++}
++
++func NewRot128Writer(w io.Writer) (*Rot128Writer, error) {
++	return &Rot128Writer{
++		writer: w,
++		buffer: make([]byte, 4096, 4096),
++	}, nil
++}
++
++func (w *Rot128Writer) Write(p []byte) (int, error) {
++	n := copy(w.buffer, p)
++	rot128(w.buffer[:n])
++	return w.writer.Write(w.buffer[:n])
++}
++
++func rot128(buf []byte) {
++	for idx := range buf {
++		buf[idx] += 128
++	}
++}
+Index: cipher/rot128_test.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- cipher/rot128_test.go	(date 1606698609126)
++++ cipher/rot128_test.go	(date 1606698609126)
+@@ -0,0 +1,69 @@
++package cipher
++
++import (
++	"bytes"
++	"testing"
++
++	"github.com/stretchr/testify/require"
++)
++
++var (
++	TestBuffer        = []byte{128, 129, 130}
++	ReverseTestBuffer = []byte{0, 1, 2}
++)
++
++func TestRot128Reader_Read(t *testing.T) {
++	reader, err := NewRot128Reader(bytes.NewBuffer(TestBuffer))
++	require.NoError(t, err)
++	require.NotNil(t, reader)
++
++	buf := make([]byte, 3, 3)
++	n, err := reader.Read(buf)
++	require.NoError(t, err)
++	require.Equal(t, 3, n)
++	require.Equal(t, ReverseTestBuffer, buf)
++}
++
++func TestRot128Reader_Reversible(t *testing.T) {
++	reader, err := NewRot128Reader(bytes.NewBuffer(TestBuffer))
++	require.NoError(t, err)
++	require.NotNil(t, reader)
++
++	reader, err = NewRot128Reader(reader)
++	require.NoError(t, err)
++	require.NotNil(t, reader)
++
++	buf := make([]byte, 3, 3)
++	n, err := reader.Read(buf)
++	require.NoError(t, err)
++	require.Equal(t, 3, n)
++	require.Equal(t, TestBuffer, buf)
++}
++
++func TestRot128Writer_Write(t *testing.T) {
++	buf := &bytes.Buffer{}
++	writer, err := NewRot128Writer(buf)
++	require.NoError(t, err)
++	require.NotNil(t, writer)
++
++	n, err := writer.Write(TestBuffer)
++	require.NoError(t, err)
++	require.Equal(t, 3, n)
++	require.Equal(t, ReverseTestBuffer, buf.Bytes())
++}
++
++func TestRot128Writer_Reversible(t *testing.T) {
++	buf := &bytes.Buffer{}
++	writer, err := NewRot128Writer(buf)
++	require.NoError(t, err)
++	require.NotNil(t, writer)
++
++	writer, err = NewRot128Writer(writer)
++	require.NoError(t, err)
++	require.NotNil(t, writer)
++
++	n, err := writer.Write(TestBuffer)
++	require.NoError(t, err)
++	require.Equal(t, 3, n)
++	require.Equal(t, TestBuffer, buf.Bytes())
++}
+Index: go.sum
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- go.sum	(date 1606624060965)
++++ go.sum	(date 1606624060965)
+@@ -0,0 +1,13 @@
++github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=
++github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
++github.com/omise/omise-go v1.0.5 h1:OLqrvFFdBQ6GJUBo583DU6Xb4Cm1glqxOjd27XhLNYQ=
++github.com/omise/omise-go v1.0.5/go.mod h1:zAupNC0wZf+QJ/yz+d39z4g8k4UEeFZP7GhiZZTq5XY=
++github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
++github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
++github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
++github.com/stretchr/testify v1.6.1 h1:hDPOHmpOpP40lSULcqw7IrRb/u7w6RpDC9399XyoNd0=
++github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
++gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
++gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
++gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c h1:dUUwHk2QECo/6vqA44rthZ8ie2QXMNeKRTHCNY2nXvo=
++gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+Index: cipher/encipher.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- cipher/encipher.go	(date 1606698609136)
++++ cipher/encipher.go	(date 1606698609136)
+@@ -0,0 +1,51 @@
++package cipher
++
++import (
++	"encoding/csv"
++	"fmt"
++	"os"
++)
++
++// Encrypt describes a series of encryption functions
++type Encrypt interface {
++	// MakeDecipherText enciphers a file, using the 128 Caesar Cipher
++	MakeDecipherText()
++}
++
++// Encipher is a struct that is used to handle encryption
++type Encipher struct {
++	fileName string
++}
++
++// NewEncipher returns a new Encipher
++func NewEncipher(f string) Encrypt {
++	return &Encipher{
++		fileName: f,
++	}
++}
++
++func (e Encipher) MakeDecipherText() {
++	ciphered, err := os.Create(e.fileName)
++	if err != nil {
++		fmt.Printf("[FILE OPEN ERROR] - Couldn't open new file: %s\n", err)
++	}
++	defer ciphered.Close()
++
++	cw, err := NewRot128Writer(ciphered)
++	if err != nil {
++		fmt.Printf("[INTIALIZATION ERROR] - Failed to load writer: %s\n", err)
++	}
++
++	writer := csv.NewWriter(cw)
++	var data = [][]string{
++		{"Donor", "Number", "Donation"},
++		{"Yshtola Ruhn", "1111111111111111", "2200"},
++		{"Thancred Waters", "1111111111111112", "4300"},
++		{"Alisaie Leveilleur", "1111111111111113", "3900"},
++	}
++
++	err = writer.WriteAll(data)
++	if err != nil {
++		fmt.Println(e)
++	}
++}
+Index: cipher/decipher.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- cipher/decipher.go	(date 1606698609139)
++++ cipher/decipher.go	(date 1606698609139)
+@@ -0,0 +1,53 @@
++package cipher
++
++import (
++	"errors"
++	"io/ioutil"
++	"os"
++)
++
++const DecipherExtension = ".decipher"
++
++// Decrypt describes a series of decryption functions
++type Decrypt interface {
++	// GetDecipherText deciphers a file, returning the output or an error if one occurs
++	GetDecipherText() (string, error)
++}
++
++// Decipher is a struct that is used to handle decryption
++type Decipher struct {
++	fileName string
++}
++
++// NewDecipher returns a new Decipher
++func NewDecipher(f string) Decrypt {
++	return &Decipher{
++		fileName: f,
++	}
++}
++
++func (d Decipher) GetDecipherText() (string, error) {
++	cipheredFile, err := os.Open(d.fileName)
++	if err != nil {
++		return "", err
++		//fmt.Printf("[FILE READ ERROR] - Couldn't read encrypted file: %s\n", err)
++	}
++	defer cipheredFile.Close()
++
++	reader, err := NewRot128Reader(cipheredFile)
++	if err != nil {
++		return "", errors.New("[DECIPHER INITIALIZATION ERROR] Failed to load reader")
++	}
++
++	output, err := ioutil.ReadAll(reader)
++	if err != nil {
++		return "", errors.New("[READER ERROR] Failed to load reader")
++	}
++
++	if err := ioutil.WriteFile(d.fileName+DecipherExtension, output, os.ModePerm); err != nil {
++		return "", errors.New("[WRITE ERROR] Failed to load reader")
++		//fmt.Printf("[WRITE ERROR] - failed to write deciphered file: %s\n", err)
++	}
++
++	return d.fileName + DecipherExtension, nil
++}
+Index: http/omise_test.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- http/omise_test.go	(date 1606698609117)
++++ http/omise_test.go	(date 1606698609117)
+@@ -0,0 +1,190 @@
++package http
++
++import (
++	"fmt"
++	"testing"
++	"time"
++
++	"github.com/omise/omise-go"
++	"github.com/omise/omise-go/operations"
++	"github.com/stretchr/testify/require"
++	"go-tamboom/model"
++)
++
++const CVV = "123"
++
++func TestOmise_CreateCard(t *testing.T) {
++	api, err := NewOmise()
++	require.NoError(t, err)
++
++	cases := map[string]struct {
++		donation    model.Donation
++		isErrorCase bool
++	}{
++		"Success": {
++			donation: model.Donation{
++				Name:            "Penny Morebucks",
++				AmountSubunits:  10000,
++				CCNumber:        "4242424242424242",
++				CVV:             CVV,
++				ExpirationMonth: time.Month(10),
++				ExpirationYear:  2022,
++			},
++			isErrorCase: false,
++		},
++		"Expired Card": {
++			donation: model.Donation{
++				Name:            "Penny Morebucks",
++				AmountSubunits:  10000,
++				CCNumber:        "4242424242424242",
++				CVV:             CVV,
++				ExpirationMonth: time.Month(10),
++				ExpirationYear:  2020,
++			},
++			isErrorCase: true,
++		},
++	}
++
++	for name, tc := range cases {
++		t.Run(name, func(t *testing.T) {
++			_, err := api.CreateCard(tc.donation)
++			if tc.isErrorCase {
++				require.Error(t, err)
++			} else {
++				require.NoError(t, err)
++			}
++		})
++	}
++}
++
++func TestOmise_CreateCharge(t *testing.T) {
++	api, err := NewOmise()
++	require.NoError(t, err)
++
++	cases := map[string]struct {
++		donation            model.Donation
++		expectedStatus      omise.ChargeStatus
++		expectedFailureCode string
++	}{
++		"Success": {
++			donation: model.Donation{
++				Name:            "Penny Morebucks",
++				AmountSubunits:  10000,
++				CCNumber:        "4242424242424242",
++				CVV:             CVV,
++				ExpirationMonth: time.Month(10),
++				ExpirationYear:  2022,
++			},
++			expectedStatus: omise.ChargeStatus("successful"),
++		},
++		"Failed": {
++			donation: model.Donation{
++				Name:            "Penny Morebucks",
++				AmountSubunits:  10000,
++				CCNumber:        "4111111111110014",
++				CVV:             CVV,
++				ExpirationMonth: time.Month(10),
++				ExpirationYear:  2022,
++			},
++			expectedStatus:      omise.ChargeStatus("failed"),
++			expectedFailureCode: "payment_rejected",
++		},
++	}
++
++	for name, tc := range cases {
++		t.Run(name, func(t *testing.T) {
++			card, err := api.CreateCard(tc.donation)
++			require.NoError(t, err)
++
++			charge, err := api.CreateCharge(tc.donation, card)
++			require.NoError(t, err)
++
++			require.Equal(t, tc.expectedStatus, charge.Status, fmt.Sprintf("[%s] Expected: %s, Got: %s", name, tc.expectedStatus, charge.Status))
++			if tc.expectedStatus != ("successful") {
++				require.Equal(t, &tc.expectedFailureCode, charge.FailureCode, fmt.Sprintf("[%s] Expected: %p, Got: %p", name, &tc.expectedFailureCode, charge.FailureCode))
++			}
++		})
++	}
++}
++
++func TestOmiseClient_CreateCharge(t *testing.T) {
++	c, err := omise.NewClient(OmisePublicKey, OmiseSecretKey)
++	require.NoError(t, err)
++
++	cases := map[string]struct {
++		ccNumber            string
++		expectedStatus      omise.ChargeStatus
++		expectedFailureCode string
++	}{
++		"Success Case": {
++			ccNumber:       "4242424242424242",
++			expectedStatus: omise.ChargeStatus("successful"),
++		},
++		"insufficient_fund": {
++			ccNumber:            "4111111111140011",
++			expectedStatus:      omise.ChargeStatus("failed"),
++			expectedFailureCode: "insufficient_fund",
++		},
++		"failed_processing": {
++			ccNumber:            "4111111111120013",
++			expectedStatus:      omise.ChargeStatus("failed"),
++			expectedFailureCode: "failed_processing",
++		},
++		"payment_rejected": {
++			ccNumber:            "4111111111110014",
++			expectedStatus:      omise.ChargeStatus("failed"),
++			expectedFailureCode: "payment_rejected",
++		},
++		"failed_fraud_check": {
++			ccNumber:            "4111111111190016",
++			expectedStatus:      omise.ChargeStatus("failed"),
++			expectedFailureCode: "failed_fraud_check",
++		},
++		"stolen_or_lost_card": {
++			ccNumber:            "5555551111100012",
++			expectedStatus:      omise.ChargeStatus("failed"),
++			expectedFailureCode: "stolen_or_lost_card",
++		},
++		"invalid_account_number": {
++			ccNumber:            "5555551111150017",
++			expectedStatus:      omise.ChargeStatus("failed"),
++			expectedFailureCode: "invalid_account_number",
++		},
++		"invalid_security_code": {
++			ccNumber:            "5555551111130001",
++			expectedStatus:      omise.ChargeStatus("failed"),
++			expectedFailureCode: "invalid_security_code",
++		},
++	}
++	for name, tc := range cases {
++		t.Run(name, func(t *testing.T) {
++			card, createToken := &omise.Card{}, &operations.CreateToken{
++				Name:            "Somchai Prasert",
++				Number:          tc.ccNumber,
++				ExpirationMonth: time.Month(10),
++				ExpirationYear:  2022,
++
++				City:         Tokyo,
++				PostalCode:   ZipCode,
++				SecurityCode: CVV,
++			}
++
++			e := c.Do(card, createToken)
++			require.Nil(t, e, fmt.Sprintf("[%s] Failed to create card", name))
++
++			charge, createCharge := &omise.Charge{}, &operations.CreateCharge{
++				Amount:   10000,
++				Currency: JPY,
++				Card:     card.ID,
++			}
++
++			e = c.Do(charge, createCharge)
++			require.Nil(t, e, fmt.Sprintf("[%s] Failed to create charge", name))
++
++			require.Equal(t, tc.expectedStatus, charge.Status, fmt.Sprintf("[%s] Expected: %s, Got: %s", name, tc.expectedStatus, charge.Status))
++			if tc.expectedStatus != ("successful") {
++				require.Equal(t, &tc.expectedFailureCode, charge.FailureCode, fmt.Sprintf("[%s] Expected: %p, Got: %p", name, &tc.expectedFailureCode, charge.FailureCode))
++			}
++		})
++	}
++}
+Index: data/test.csv
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- data/test.csv	(date 1606346896685)
++++ data/test.csv	(date 1606346896685)
+@@ -0,0 +1,4 @@
++Donor,Number,Donation
++Yshtola Ruhn,1111111111111111,2200
++Thancred Waters,1111111111111112,4300
++Alisaie Leveilleur,1111111111111113,3900
+Index: .gitignore
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- .gitignore	(date 1606698451577)
++++ .gitignore	(date 1606698451577)
+@@ -0,0 +1,1 @@
++.idea
+\ No newline at end of file
+Index: service/summary.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- service/summary.go	(date 1606698609134)
++++ service/summary.go	(date 1606698609134)
+@@ -0,0 +1,79 @@
++package service
++
++import (
++	"fmt"
++)
++
++// ChargeSuccess represents a successful donation charge made
++type ChargeSuccess struct {
++	donor  string
++	amount int64
++}
++
++// Summary represents a summary of the entire transaction process
++type Summary struct {
++	failures  int64
++	total     int64
++	successes []ChargeSuccess
++}
++
++// NewSummary returns a new Summary
++func NewSummary() Summary {
++	return Summary{
++		failures:  int64(0),
++		total:     int64(0),
++		successes: make([]ChargeSuccess, 0),
++	}
++}
++
++// AddSuccess creates a new ChargeSuccess and adds it to the Summary
++func (s *Summary) AddSuccess(donor string, amount int64) {
++	s.total = s.total + amount
++	s.successes = append(s.successes, ChargeSuccess{
++		donor:  donor,
++		amount: amount,
++	})
++}
++
++// AddToFailure adds the failed donation amount to the Summary
++func (s *Summary) AddToFailure(amount int64) {
++	s.total = s.total + amount
++	s.failures = s.failures + amount
++}
++
++// PrintSummary prints the data of the Summary
++func (s *Summary) PrintSummary() {
++	fmt.Printf("[Total Donations Received]: JPY %d\n", s.total)
++	fmt.Printf("[Successful Donations]: JPY %d\n", s.summarizeSuccess())
++	fmt.Printf("[Failed Donations]: JPY %d\n", s.failures)
++
++	fmt.Printf("[Average Per Person]: JPY %f\n", s.averageSuccess())
++	fmt.Printf("[Top Donor]: %s\n", s.topDonor())
++}
++
++func (s *Summary) summarizeSuccess() int64 {
++	total := int64(0)
++	for _, sum := range s.successes {
++		total = total + sum.amount
++	}
++	return total
++}
++
++func (s *Summary) averageSuccess() float64 {
++	avg := int64(0)
++	for _, sum := range s.successes {
++		avg = avg + sum.amount
++	}
++
++	return float64(avg / int64(len(s.successes)))
++}
++
++func (s *Summary) topDonor() string {
++	topDonor := s.successes[0]
++	for _, donor := range s.successes {
++		if donor.amount > topDonor.amount {
++			topDonor = donor
++		}
++	}
++	return topDonor.donor
++}
+Index: cmd/doc.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- cmd/doc.go	(date 1606696353654)
++++ cmd/doc.go	(date 1606696353654)
+@@ -0,0 +1,4 @@
++// Package cmd contains executable files, outside of the main module application
++//
++// encrypt contains executables to encrypt files, taking a file name as an argument
++package cmd
+Index: data/fng.1000.csv.rot128
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- data/fng.1000.csv.rot128	(date 1606448195217)
++++ data/fng.1000.csv.rot128	(date 1606448195217)
+@@ -0,0 +1,1 @@
++����������������������������֬�������������������������Ҡ������묲�����������������������������������������������Ƞ�������������묲���������������������������������������������Ҡ���������������������������������������������������Ǡ���묱������������������������������������������à�C;묲���������������������������������������������Ơ������������������������������������������������������������͠���������������������������������������������������נ�������󬱸��������������������������������������������Ǡ���������笳����������������������������������������������͠�����������������������������������������������������Ԡ�����嬴������������������������������������������� ��������묳���������������������������������������������͠���������򬴵�������������������������������������������Π���무�������������������������������������������͠�������鬱���������������������������������������������à�C;묳����������������������������������������Ҡ��������쬲���������������������������������������������Р��������������������������������������������������͠�C;무�����������������������������������������͠����䬳�����������������������������������������������Π���������󬴸����������������������������������������Ǡ������䬳����������������������������������������ᠠ͠��������������������������������������������������נ����������嬳���������������������������������������������Ԡ���������������������������������������������������͠�������嬲����������������������������������������������Ԡ���������򬲷�������������������������������������������͠����������ᬳ�������������������������������������������Ơ��������������������������������������������������������Π�����嬳�������������������������������������������Ġ�������嬳�������������������������������������������à�����嬴������������������������������������������ �������������������������������������������������à��������ᬳ�����������������������������������������������Р�������������������������������������������������������������묳����������������������������������������������ʠ����������������������������������������������������Р�����嬴�����������������������������������������Р�����������������������������������������������������Ơ����������������������������������������������������͠�����򬴸��������������������������������������������͠��������묳���������������������������������������������������������������������������������������������������������������������������������������������������Ƞ�����嬱��������������������������������������������������������䬳�������������������������������������������������������문���������������������������������������������Π��������������������������������������������������������Р���������������󬷶�������������������������������������������Ơ�������鬳�������������������������������������������Ǡ�������󬴹�����������������������������������������͠�����󬱶���������������������������������������������̠���������무������������������������������������������� �������������������������������������������������� ������鬳�������������������������������������������Š������������������������������������������������������Ԡ�����������������������������������������������͠��������䬴����������������������������������������������͠������䬴�������������������������������������������Р����������������������������������������������������Ǡ������򬱸��������������������������������������������Ҡ��������ᬳ��������������������������������������������� ����⬴�������������������������������������������Р���������������������������������������������������������Ҡ�C;묵������������������������������������������Ġ������������������������������������������������������̠�������무������������������������������������������Ġ���묲��������������������������������������������Π�C;묲������������������������������������������Ӡ���������򬳴��������������������������������������������� ��������򬳲����������������������������������������������������������������������������������������������� �������묱������������������������������������������������������������������������������������������à�������鬱��������������������������������������������à��������������������������������������������������������Ԡ�������������������������������������������������Ӡ�����򬱸�����������������������������������������Р����嬴�������������������������������������������à���묳���������������������������������������������Ǡ���������묵������������������������������������������̠������鬳����������������������������������������������Р�����嬳���������������������������������������������Р��������䬲���������������������������������������������Ϡ�����嬳��������������������������������������������͠�������������������������������������������������������Ǡ����������������������������������������������������Ǡ������������������������������������������������Ơ�������鬴������������������������������������������̠���������������������������������������������������������Ǡ������䬱������������������������������������������à������������������������������������������������������Ƞ������󬲵��������������������������������������������͠����⬲�������������������������������������������͠�����򬲶��������������������������������������������Ǡ����������������������������������������������������� ����򬱷�������������������������������������������à����󬴷�������������������������������������������Ӡ��������쬴���������������������������������������������à���������묳�������������������������������������������à������󬴹���������������������������������������à�����������������������������������������������������������������󬲸��������������������������������������������� ������묱����������������������������������������������Ƞ��������᬴���������������������������������������������Š����⬱������������������������������������������Р������䬳��������������������������������������������Ԡ����������᬴�����������������������������������������ᠠԠ������䬱���������������������������������������������� ���������򬱸�������������������������������������������Ơ����䬴��������������������������������������������Ҡ�������鬴������������������������������������������Ǡ������鬳�������������������������������������������Ҡ������������������������������������������������������Ǡ��������������������������������������������������������̠����������������������������������������������������������� ���������무�����������������������������������������Ԡ���������������������������������������������������Ҡ���������笳�����������������������������������������̠�����嬴�������������������������������������������Ƞ������򬱱���������������������������������������������Ӡ������󬲶����������������������������������������� �������������������������������������������������������Ƞ������������󬳶���������������������������������������������Р���������򬴲�������������������������������������������Š���������򬳶����������������������������������������������Р�����������������������������������������������������Š����򬸳�������������������������������������������������������󬶹������������������������������������������Ҡ�������嬱����������������������������������������������͠���������������������������������������������������������� ������������������������������������������������������à������������������������������������������������������� �����嬲�������������������������������������������Ҡ��������������������������������������������������Р���������������������������������������������������Ԡ����������᬴�������������������������������������������ʠ������򬴹������������������������������������������͠��������������������������������������������������� ����������������������������������������������������� ���������������������������������������������������������͠��������������������������������������������������Ҡ����������������������������������������������������� ��������쬴��������������������������������������������Ӡ�������������������������������������������������������͠��������嬴���������������������������������������������̠�������������������������������������������������������������������������������������������������������������������������򬳹��������������������������������������������Р����⬶�����������������������������������������Ӡ���������������������������������������������������������Ƞ�����󬲱������������������������������������������ʠ���������������󬱴����������������������������������������������Ӡ���������笲����������������������������������������������Ҡ���������笳������������������������������������������������Ǡ����⬲����������������������������������������������Р���������󬱰��������������������������������������������Ƞ�����������������������������������������������������Ơ������򬳱������������������������������������������͠���������򬴳���������������������������������������������������������������������������������������������à������󬳹�����������������������������������������Р�C;묹������������������������������������������Р�������嬳���������������������������������������������à������󬴴�������������������������������������������à������������������������������������������������������������󬳱������������������������������������������Ҡ���������������������������������������������������Ġ���������������󬲵����������������������������������������à�����������󬱶����������������������������������������������������嬳���������������������������������������������Š������鬳��������������������������������������������ɠ�����嬱�����������������������������������������Р�������鬱��������������������������������������������Ġ���������򬲴��������������������������������������������� �����嬲���������������������������������������� �����󬴳�������������������������������������������̠���������򬱹��������������������������������������������Ӡ�������鬲��������������������������������������������Ƞ�������������묲��������������������������������������������Р����������嬳��������������������������������������������̠����������嬲�����������������������������������������Ƞ������묱��������������������������������������������Р���������������������������������������������������Р�������嬲�������������������������������������������Ҡ����䬴�������������������������������������������Ϡ��������ᬱ������������������������������������������Ԡ�����������������������������������������������������Ҡ���������笳�������������������������������������������Ǡ�C;묳�����������������������������������������͠�����嬴���������������������������������������������Ӡ��������ᬲ�����������������������������������������������Ǡ�������󬹵�������������������������������������������à��������������������������������������������������������͠��������嬱����������������������������������������������� �����嬱������������������������������������������Ҡ����������ᬲ�������������������������������������������Р��������嬱����������������������������������������������Π�������󬴸���������������������������������������������Р���������������������������������������������������������à�����嬲�������������������������������������������٠������������������������������������������������Р�����嬳������������������������������������������������������묲��������������������������������������������������䬱��������������������������������������������Π�������嬲�����������������������������������������Ǡ���������묳������������������������������������������ �����������������������������������������������������������󬳱�������������������������������������������à����⬲��������������������������������������������à��������������������������������������������������à����������������������������������������������������������������䬴����������������������������������������ɠ����������᬴���������������������������������������������Ǡ��������嬴����������������������������������������� ������󬳷������������������������������������������ ��������������������������������������������������Ҡ���������󬱸���������������������������������������������à���묳���������������������������������������������à��������䬲�������������������������������������������������������󬹷��������������������������������������͠������鬲�������������������������������������������à���묳���������������������������������������������Š��������ᬲ������������������������������������������������Ǡ��������쬳��������������������������������������������ɠ������������������������������������������������������Ӡ���������������������������������������������������͠������������������������������������������������������Ǡ��������򬴴����������������������������������������������ɠ��������嬴����������������������������������������������Ҡ�������󬴶�������������������������������������������Р��������嬵�������������������������������������������� ����⬱������������������������������������������� �C;묳������������������������������������������Р����䬴��������������������������������������������Ơ�C;묵�������������������������������������������Ӡ�������鬱�������������������������������������������Ҡ�������������������������������������������������� ��������᬴�������������������������������������������� ���������󬳹������������������������������������������� �C;묶�������������������������������������������������嬲������������������������������������������͠���������������������������������������������������������Ġ����򬳲�����������������������������������������������à��������䬲������������������������������������������Р�����嬲�������������������������������������������à������󬳹�����������������������������������������͠����䬷�������������������������������������������à������󬴲����������������������������������������������à�����嬴�������������������������������������������Р������䬳��������������������������������������������ʠ���������򬲹�����������������������������������������Ƞ�����������󬴰��������������������������������������������� ������䬳������������������������������������������� ������������������������������������������������à���������󬳷������������������������������������������Ǡ��������䬳��������������������������������������C3����Ǡ����嬲�������������������������������������������à����嬳����������������������������������������������Ǡ����󬴶��������������������������������������������Ġ�������������������������������������������������������Ҡ��������������������������������������������������Ơ��������򬵸����������������������������������������������Ҡ�������������묲����������������������������������������������������������������󬷴����������������������������������������Ҡ����󬴱���������������������������������������������Ǡ����������������������������������������������������Ġ����򬴵������������������������������������������Р������������󬴰��������������������������������������������à����������������������������������������������������à�����嬵�������������������������������������������������������������������������������������������������������Р�������嬳����������������������������������������������Ӡ�������������묱�������������������������������������������������������묲������������������������������������������͠������������󬳲���������������������������������������������Ơ�����������������������������������������������������������������������������������������������������������������Ơ�����󬲸���������������������������������������������Р����󬹶�������������������������������������������Ơ�������󬲹�������������������������������������������ɠ�������鬱����������������������������������������������Р����嬹��������������������������������������������ɠ���������󬳹�����������������������������������������Ӡ��������ᬳ��������������������������������������������͠�������������������������������������������������͠���묲���������������������������������������������à��������䬴���������������������������������������������������������������������������������������������������������͠�������嬴������������������������������������������� �����򬱰������������������������������������������Ԡ���무���������������������������������������������Ǡ�������󬲱���������������������������������������Р������򬲲�������������������������������������������Ƞ������䬵��������������������������������������������� ���������笴�����������������������������������������͠����������������������������������������������͠���������묲�������������������������������������������Ҡ����������������������������������������������������� ���������묳�����������������������������������������������Π������������󬵹������������������������������������������ʠ�����������������������������������������������������̠���������������󬲶��������������������������������������������Ǡ�������������������������������������������������������Ƞ�������鬲����������������������������������������������Π����󬱹�������������������������������������������Ǡ��������������������������������������������������֠���������������󬴲��������������������������������������������Ƞ�������������������������������������������������������Ϡ��������������������������������������������������Ӡ����嬱���������������������������������������������à������������󬳱�����������������������������������������Р��������������������������������������������������������Ǡ����������������������������������������������������Ԡ������������������������������������������������������Ӡ��������������������������������������������������������������������������������������������������ᠠР����������ᬲ��������������������������������������������à������������������������������������������������à��������ᬳ���������������������������������������������ʠ����󬲵����������������������������������������������Ԡ����嬱��������������������������������������������� ���������������������������������������������������Ġ����������嬱���������������������������������������������Ԡ������䬳������������������������������������������Š����󬲱�������������������������������������������͠����򬱴������������������������������������������Ġ����⬱������������������������������������������Ӡ����������嬵�������������������������������������������Ƞ����⬴�����������������������������������������������̠��������������������������������������������������Ҡ����⬳��������������������������������������������Ǡ����󬳰����������������������������������������������������������������������������������������������� �����������������������������������������������������Ơ��������������������������������������������������������͠�����򬳶�������������������������������������������̠�����嬳����������������������������������������������ʠ�������嬴���������������������������������������������̠����򬵲���������������������������������������������Ơ���������򬳳������������������������������������������C$�Ӡ����嬴����������������������������������������������͠�����������������������������������������������Ƞ���������������󬴹����������������������������������������������Ԡ���������������������������������������������������������Р������������������������������������������������������̠������������������������������������������������������͠�������嬸����������������������������������������Ӡ�����嬱����������������������������������������ᠠʠ��������嬱����������������������������������������������Ġ���������嬶������������������������������������������à������무���������������������������������������������������������무���������������������������������������������Š����⬲������������������������������������������à��������������������������������������������������Ӡ�������嬴��������������������������������������������Р����嬱������������������������������������������� ���묵�������������������������������������������������⬲��������������������������������������C)���� ����⬱����������������������������������������������Ӡ����򬳷������������������������������������������ʠ��������䬳������������������������������������������͠����򬳹���������������������������������������������Π������������������������������������������������Ǡ������򬴶����������������������������������������à�����������������������������������������������������Ҡ����䬱���������������������������������������������Ǡ�����嬴������������������������������������������Ġ�������������������������������������������������������Ԡ���������嬱�����������������������������������������Ƞ������������������������������������������������Ҡ�������무������������������������������������������à���������笱�������������������������������������������� �����������������������������������������������ᠠɠ������������������������������������������������Ԡ����䬴����������������������������������������������Ƞ����������������������������������������������������à�������嬴������������������������������������������ʠ���������笳��������������������������������������������Ġ������������������������������������������������������Ƞ�����������������������������������������������Ơ���������������������������������������������������Ҡ�������������������������������������������������������à����⬳�����������������������������������������������Р������󬳲�����������������������������������������͠�������������������������������������������������������Ƞ�������������묳��������������������������������������������� ��������򬴶������������������������������������C6��������󬳴�������������������������������������������Р�����������������������������������������������������͠�������嬳�������������������������������������������à��������������������������������������������������� ��������묲������������������������������������������Ӡ������묱���������������������������������������� ������򬴸�������������������������������������������Ǡ�C;묵������������������������������������������Ԡ�������嬱���������������������������������������������� ���������������������������������������������������Ơ�������嬴��������������������������������������������͠�����嬹���������������������������������������������C;묳������������������������������������������������à���������笵��������������������������������������������Ӡ�������������������������������������������������� ���������򬲲��������������������������������������������������묷��������������������������������������������ʠ��������䬵����������������������������������������Ҡ���������򬳰�����������������������������������������������������������������������������������������������������Ǡ�����������������������������������������������������������嬱���������������������������������������������͠�C;무��������������������������������������������ɠ���������򬲲���������������������������������������������̠����������ᬱ�����������������������������������������������Ǡ����������������������������������������������������Ҡ��������������������������������������������������������͠�������嬴���������������������������������������������ʠ����������嬲�����������������������������������������à������������������������������������������������������Ԡ�������鬱��������������������������������������������͠�������鬳��������������������������������������������Ġ���������������������������������������������������Ԡ��������嬴������������������������������������������Π������������������������������������������������������Ԡ��������������������������������������������������������Š��������򬱸��������������������������������������������� ���������������������������������������������������Ġ�������嬱���������������������������������������������Р��������򬴵���������������������������������������������Ϡ�������鬴�������������������������������������������ɠ�����򬳵���������������������������������������������͠������������󬲸�������������������������������������������͠�������������묱����������������������������������������������à��������嬳��������������������������������������������������������������������������������������������������Ԡ����⬳������������������������������������������Ǡ���������������������������������������������������������٠�����嬷����������������������������������������Š���������������������������������������������������Š������䬴���������������������������������������������à����������嬱��������������������������������������������������������嬹�������������������������������������������̠����󬲴��������������������������������������������͠�������鬲�������������������������������������������������⬴��������������������������������������������Ҡ��������嬲������������������������������������������������������򬱶�����������������������������������������Ơ�C;묷�������������������������������������������נ���������������������������������������������������������Ҡ���������묶�����������������������������������������Ҡ��������ᬲ�������������������������������������������Ԡ�������������������������������������������������à���������������������������������������������������Ǡ����������ᬳ��������������������������������������������Ƞ�������鬳������������������������������������������� ���������嬴��������������������������������������������� �����󬳹��������������������������������������������Ǡ��������������������������������������������������������Ơ�������鬲������������������������������������������à�����򬲹������������������������������������������Ġ�������������묲�����������������������������������������Ҡ����������嬴����������������������������������������������Ƞ�����嬳�������������������������������������������Ơ�����嬴�����������������������������������������������Ǡ���������򬴳��������������������������������������������Ǡ���������嬴�������������������������������������������Ƞ���������������󬸸���������������������������������������à����򬳰������������������������������������������������������򬳲��������������������������������������������Π�����������������������������������������������������Ҡ�����������󬳱��������������������������������������Ӡ����⬱��������������������������������������������Ơ��������ᬳ���������������������������������������������נ�������������������������������������������������������Π������鬳���������������������������������������������Ǡ����������������������������������������������������Ġ�����������������������������������������������Ƞ����⬳��������������������������������������������Ӡ�������������������������������������������������������à��������嬴�������������������������������������������� �������������묳�����������������������������������������������Ġ�����������󬲵���������������������������������������������������������������������������������������������������ɠ���������������󬱷����������������������������������������������Ġ�����󬲸������������������������������������������� �C;묱������������������������������������������Ġ����⬲���������������������������������������������Ǡ�����������󬳰��������������������������������������������� ���������򬹳������������������������������������������Ġ������鬱��������������������������������������������נ���������󬴰����������������������������������������Ǡ��������쬳����������������������������������������������͠������󬴳��������������������������������������������à������󬲷��������������������������������������������à�������������묱����������������������������������������� ���������򬳶��������������������������������������������Ơ��������������������������������������������������������Р���������������������������������������������������� �C;묲��������������������������������������������à�����嬳����������������������������������������ʠ�������������묳��������������������������������������������Š������󬳶��������������������������������������������Ġ�����������������������������������������������������ʠ������򬱶�����������������������������������������Ԡ����򬴷����������������������������������������������Р���������򬵶����������������������������������������͠���������笲�����������������������������������������������Ԡ�������嬴���������������������������������������������Ƞ����󬳴��������������������������������������������Ҡ���������������������������������������������������������������������������������������������������������͠���������򬴷�����������������������������������������͠��������������������������������������������������������͠������鬱��������������������������������������������͠��������쬱��������������������������������������������ɠ��������쬳��������������������������������������������à�����嬳�������������������������������������������Š���������򬵰���������������������������������������������Ġ���������򬱳������������������������������������������͠�������������������������������������������������������͠��������嬲����������������������������������������������Ҡ���������������������������������������������������������Ӡ�����������������������������������������������������̠�������������������������������������������������������������������������������������������������������������Р��������䬴��������������������������������������������Ǡ���������������������������������������������������Р���묳���������������������������������������������Ԡ�����������������������������������������������������Ġ����򬴸������������������������������������������Р�����򬲵�����������������������������������������������󬶹��������������������������������������������͠������������������������������������������������� �������������������������������������������������� ��������䬱����������������������������������������� ������������������������������������������������������ɠ���������笴�������������������������������������������Ơ�����嬲����������������������������������������������͠����������嬲�������������������������������������������̠����⬳�������������������������������������������Ҡ��������嬵�����������������������������������������������ʠ��������������������������������������������������Ӡ��������ᬵ����������������������������������������������������������������������������������������������ɠ�����������������������������������������������������à�����������������������������������������������������Ƞ������������󬵴��������������������������������������������Š����䬴�����������������������������������������נ������������������������������������������������͠������䬹���������������������������������������������Р��������䬱���������������������������������������������Ġ�������묲��������������������������������������������Р����⬲�������������������������������������������������������������������������������������������������������������묱�������������������������������������������٠���������򬳸��������������������������������������������Ǡ���������������������������������������������������������Ƞ��������򬳲������������������������������������������Ǡ������������������������������������������������������������Ǡ���������򬱹���������������������������������������������Š���������묱����������������������������������������������Ġ��������䬴�������������������������������������������Р������������󬴶���������������������������������������͠��������������������������������������������������ᠠ̠������������������������������������������������������Р���������������������������������������������������ᠠȠ���������笴�����������������������������������������������̠����⬱���������������������������������������������Р����򬲳���������������������������������������͠����嬴���������������������������������������������Š���������򬴰��������������������������������������������͠������򬲶��������������������������������������������Ԡ������������������������������������������������������à�����嬴������������������������������������������̠�������嬳���������������������������������������������à�������������묱�������������������������������������������͠�����󬲸����������������������������������������������Ҡ��������������������������������������������������������͠������������󬲸�����������������������������������������͠��������������������������������������������������������� �������鬸���������������������������������������������������������������������������������������������͠������묳����������������������������������������������Ƞ�����嬴��������������������������������������������Π�������嬸������������������������������������������Ƞ���������򬱹������������������������������������������������������������������������������������������������̠����������������������������������������������������������Ҡ�����嬱��������������������������������������������Ǡ����������������������������������������������������������Ӡ���������󬴶�������������������������������������������Ԡ����󬳴�������������������������������������������͠�������������������������������������������������� ���������笹����������������������������������������Ġ�����򬷳�������������������������������������������Ԡ���������무��������������������������������������������ʠ������鬱���������������������������������������������Ԡ��������嬲�������������������������������������������C$����C;무�������������������������������������������Р������������������������������������������������͠������䬱�������������������������������������������͠���묱���������������������������������������������Ġ����򬱹�������������������������������������������Š�������������������������������������������������Ƞ�����󬴲��������������������������������������������Р�����󬲳����������������������������������������Р��������䬳�������������������������������������������Ƞ���������������������������������������������������à��������ᬲ����������������������������������������������à��������䬴�����������������������������������������Ӡ�����������������������������������������������������Ǡ������������󬵸��������������������������������������������Ԡ���������򬱵��������������������������������������������Ӡ���������򬴹������������������������������������������� �������������������������������������������������������Ϡ������䬱������������������������������������������Ԡ��������������������������������������������������������� ������������������������������������������������������Р���묲�������������������������������������������� ��������嬳���������������������������������������������͠��������䬴����������������������������������������������� �������������무�������������������������������������������Ƞ������묱������������������������������������������������͠���������������������������������������������������Ҡ����򬳳������������������������������������������à�������������������������������������������������������Π����������ᬳ���������������������������������������������Ӡ�������鬹�������������������������������������������������������������������������������������������������������Ҡ������������󬳰��������������������������������������������Р���������򬹰������������������������������������������Ơ���������󬴰�����������������������������������������Р�����������󬴰������������������������������������������������������쬳�������������������������������������������Π�C;묱���������������������������������������������Š���������������������������������������������������������������򬴱������������������������������������������͠�������������������������������������������������������נ���������򬳷�����������������������������������������ʠ���������󬵰������������������������������������������͠�����������������������������������������������������̠����䬲�����������������������������������������������������嬲���������������������������������������������Ϡ����򬱹������������������������������������������Р�������������������������������������������������Ӡ�������鬳��������������������������������������������à��������������������������������������������������Ġ���������򬲵�������������������������������������������͠���������������������������������������������������̠����嬳������������������������������������������������������������������������������������������C)����Ġ������������������������������������������������Ҡ��������᬴����������������������������������������������������⬳��������������������������������������������ʠ������򬱲��������������������������������������������� ����䬲��������������������������������������������Ǡ���������򬲵�����������������������������������������Ԡ������䬱�������������������������������������������Π������򬳳�������������������������������������������Ƞ���묳��������������������������������������������Ҡ��������䬳��������������������������������������������Ƞ��������묲�����������������������������������������̠���������������������������������������������������Ҡ������󬸷�������������������������������������������Ӡ��������򬲷����������������������������������������Ԡ���������򬱵������������������������������������������Ǡ�������嬲�������������������������������������������Ǡ�������󬱵�����������������������������������������Ǡ����������ᬱ����������������������������������������������� ������������������������������������������������ ������������������������������������������������������Р������򬴹�������������������������������������������͠����䬴�����������������������������������������Р�������嬱��������������������������������������������Ҡ������������������������������������������������������ՠ���������������������������������������������������������Ġ��������䬴�������������������������������������������ʠ����󬸳������������������������������������������͠�����嬳���������������������������������������������Ӡ����������嬶����������������������������������������������������󬴸�������������������������������������������Ġ�����򬴱������������������������������������������͠���������������������������������������������������������Π�������鬵���������������������������������������������Р�����󬲹��������������������������������������������Ҡ���������嬴���������������������������������������������Ơ������󬱷����������������������������������������������͠�����嬱������������������������������������������Ҡ��������򬵴�������������������������������������������������򬳰�������������������������������������������Ԡ�������嬱��������������������������������������������͠��������쬵�������������������������������������C6��̠������������󬴶�������������������������������������������Ơ���무����������������������������������������à����󬴸��������������������������������������������à����������������������������������������������������̠�������������묵�����������������������������������������Š���������嬲��������������������������������������������������������鬲����������������������������������������� ������������������������������������������������Ƞ�����󬳶��������������������������������������������������󬱸�������������������������������������������� ���������������������������������������������������������� ����⬸��������������������������������������������Ǡ�������묳�������������������������������������������à��������묱��������������������������������������������Ġ����⬳��������������������������������������������Ƞ��������䬱�������������������������������������������Ӡ����䬳����������������������������������������������������󬴲������������������������������������������נ������������󬳶�������������������������������������������͠������������������������������������������������������ʠ���������묳������������������������������������������������������묲������������������������������������������Ǡ����⬴������������������������������������������Ǡ���������������󬲴���������������������������������������������Ơ���������󬳸������������������������������������������Ġ����嬱�����������������������������������������͠������䬱�����������������������������������������������Ǡ�������������������������������������������������������Ƞ�����嬴�������������������������������������������Ơ����󬲰��������������������������������������������ɠ���������������󬲴���������������������������������������������Р��������򬴶���������������������������������������������͠������������������������������������������������������Ġ�����嬱��������������������������������������������͠��������묱����������������������������������������������Ġ����󬲹���������������������������������������������Ơ��������쬶����������������������������������������������à������䬱������������������������������������������Ǡ������䬱�������������������������������������������͠������������󬱰������������������������������������������C$�Р��������嬲������������������������������������������̠�����������������������������������������������������Ǡ���������������������������������������������������������Р�����������������������������������������������������Р��������ᬳ����������������������������������������������Ԡ����嬷����������������������������������������à������������������������������������������������ɠ���������������������������������������������������������Ơ������䬲���������������������������������������������� ������򬹸�����������������������������������������͠����������������������������������������������������������������������󬲶����������������������������������������������������󬱱�������������������������������������������� �����������������������������������������������������������à�������������������������������������������������נ����������������������������������������������������Р�������鬱������������������������������������������Ġ���������������󬳲��������������������������������������������Р�����������������������������������������������������̠���������������������������������������������������������무�������������������������������������������Ϡ�������묳����������������������������������������������Ǡ�������󬱸������������������������������������������Ӡ��������嬲�������������������������������������������Ǡ�������������������������������������������������������Ӡ����������������������������������������������������̠�������鬲����������������������������������������������Ҡ����⬴���������������������������������������������Ԡ����󬴴��������������������������������������������͠��������䬳����������������������������������������������Р������������������������������������������������������ɠ��������������������������������������������������� ������������󬴰��������������������������������������������̠��������嬲���������������������������������������������͠���������묷�����������������������������������������������������������������������������������������������Р���������򬴵�������������������������������������������������������������������������������������������������� ������묲��������������������������������������������͠��������������������������������������������������͠���������嬳������������������������������������������ ��������������������������������������������������Р�����������������������������������������������Ǡ������������󬱸�������������������������������������������à��������무�����������������������������������������������̠����������ᬱ������������������������������������������Ҡ���무���������������������������������������������͠�������������������������������������������������������������򬱶������������������������������������������Ơ������������󬴴�����������������������������������������͠������鬸���������������������������������������������͠��������򬷷����������������������������������������������Ԡ������󬴰����������������������������������������������󬳷���������������������������������������������à�������鬲�������������������������������������������Ơ�������������������������������������������������Š������������������������������������������������Ơ�������嬱��������������������������������������������à��������쬱��������������������������������������������Ԡ�������������������������������������������������������Ơ���������򬲸�������������������������������������������Ҡ�������������������������������������������������͠�������󬳵���������������������������������������������Ơ������������������������������������������������������� ������������������������������������������������� ������󬹸����������������������������������������Ƞ���������������������������������������������������������������������������������������������������������������Ġ���������򬴷���������������������������������������������Ƞ��������䬳����������������������������������������������͠������������󬱵������������������������������������������Ҡ������무������������������������������������������Р�������鬳��������������������������������������������à���������묲��������������������������������������������������򬳸�������������������������������������������̠�������鬴����������������������������������������������͠�������묱�������������������������������������������������������嬲�����������������������������������������������󬱶��������������������������������������������Ӡ��������������������������������������������������Ġ�����󬴶��������������������������������������������Ƞ���������򬲶����������������������������������������Π�����������󬱶��������������������������������������������� ���������󬳵����������������������������������������������Ơ���������������������������������������������������������̠������󬱶������������������������������������������Ƞ���������笱���������������������������������������������Ҡ�������嬲�����������������������������������������������Ԡ�������嬴������������������������������������������Ǡ����������������������������������������������C3����Š��������嬳�������������������������������������������͠������󬴷��������������������������������������������������򬲰��������������������������������������������Ơ������򬴹��������������������������������������Ġ�������무��������������������������������������������Ǡ����������������������������������������������������������������嬴�����������������������������������������à����󬱲�������������������������������������������͠������򬲰������������������������������������������Ԡ���������������󬳴��������������������������������������������Ƞ����������������������������������������������Ġ���������������������������������������������������������Ҡ�������鬲������������������������������������������Р���������������������������������������������������Ӡ�����嬳������������������������������������������������������䬴���������������������������������������������ʠ�������������������������������������������������Ԡ������䬴���������������������������������������������ɠ�����������������������������������������������������͠���������묲����������������������������������������������à������무�������������������������������������������Ҡ������무����������������������������������������������Š��������嬴�������������������������������������������Ġ��������������������������������������������������������Ӡ�������嬴������������������������������������������� ��������嬳����������������������������������������������������������������������������������������������͠���������묶�����������������������������������������Ơ������������󬲱���������������������������������������������Ƞ������������󬱲�������������������������������������������Ġ��������䬱�������������������������������������������ɠ���������򬹷����������������������������������������ʠ�����󬳳��������������������������������������������ʠ����������ᬳ�����������������������������������������Ơ�������������������������������������������������Ǡ������������󬵰���������������������������������������������Ġ���������������������������������������������������Ǡ����������������������������������������������������Ǡ���������笲��������������������������������������������͠���������󬴱������������������������������������������Ӡ��������䬳�����������������������������������������ɠ���������笳������������������������������������������������Š���������묲����������������������������������������������������������󬲲�������������������������������������������Ġ�������嬴�������������������������������������������͠���������󬲷�������������������������������������������Р���������򬴵��������������������������������������Š���������򬲴������������������������������������������͠����������������������������������������������������������Р���������������󬲳����������������������������������������������Ҡ�������󬴹������������������������������������������Ǡ��������򬴱��������������������������������������������Ǡ�������󬸵�����������������������������������������Ԡ��������ᬱ����������������������������������������������Ԡ������䬴��������������������������������������������͠��������ᬳ��������������������������������������������� �����������������������������������������������Р���������������������������������������������������������Ӡ����������嬱�����������������������������������������Р������󬴴�����������������������������������������͠��������������������������������������������������à�������������������������������������������������à��������ᬶ�������������������������������������������Ԡ������󬳹����������������������������������������Ӡ����������������������������������������������������Ӡ����󬲴���������������������������������������������Ǡ������󬴴�������������������������������������������Ƞ������󬱸��������������������������������������������à����䬱��������������������������������������������à������鬱�������������������������������������������� ����䬲���������������������������������������������Ԡ���������������������������������������������������������ɠ�����󬲹�������������������������������������������Р��������䬱���������������������������������������������Р����������嬲���������������������������������������������͠��������򬳱�������������������������������������������à���������򬴱�������������������������������������������͠������������������������������������������������� ������䬳�������������������������������������������Ǡ�����򬳸���������������������������������������������̠���������������������������������������������������� ������󬵶������������������������������������������Ӡ��������᬴������������������������������������������ʠ��������������������������������������������������������̠���������������󬱰��������������������������������������������Ġ�����������󬱰��������������������������������������������Ҡ���������򬲵�������������������������������������������Ġ�������������������������������������������������������Р�����������������������������������������������������͠������򬲱����������������������������������������������Р�����嬲��������������������������������������������Ӡ���������笱����������������������������������������� ��������������������������������������������������������͠���������嬲������������������������������������������Р�������鬱��������������������������������������������͠�������������������������������������������������������Р�������무�����������������������������������������Š������������������������������������������������������ ����⬴������������������������������������������̠�������������������������������������������������à�������������������������������������������������������� ���������󬹶������������������������������������������͠���묳����������������������������������������������ɠ��������ᬱ��������������������������������������������Ġ�������묳��������������������������������������������Š�������������������������������������������������Ǡ��������������������������������������������������������Р����������������������������������������������������Р����󬱹���������������������������������������������Ҡ���������嬴����������������������������������������� ����������������������������������������������������͠����򬶱���������������������������������������Ƞ������䬱�������������������������������������������͠���������������������������������������������Ҡ������󬱰��������������������������������������������������������嬱�������������������������������������������Ơ����󬵰���������������������������������������������Ơ���������򬶵�����������������������������������������Ġ�������鬴�����������������������������������������������������������������������������������������������������묳����������������������������������������������Ϡ��������嬲����������������������������������������������Ӡ���묳������������������������������������������Ǡ�����򬴶���������������������������������������������Ϡ��������򬱱�������������������������������������������Ԡ����⬳����������������������������������������à����������ᬱ����������������������������������������������Ԡ��������쬳�������������������������������������������� ��������䬳����������������������������������������������Ӡ�������묳������������������������������������������Ӡ����������������������������������������������������������Ӡ��������嬴����������������������������������������������Ӡ�C;묳���������������������������������������������Ġ���������嬴���������������������������������������������à���������笳�������������������������������������������̠������������󬴶�������������������������������������������Ġ��������䬴�������������������������������������������Р�����嬱������������������������������������������������Ҡ�����򬵹�������������������������������������������������������������������������������������������� ��������򬴹�����������������������������������������Р���������嬱������������������������������������������Ҡ�����������������������������������������������Р����������������������������������������������������Р��������묱�������������������������������������������͠��������䬱������������������������������������������à�������������문�������������������������������������C)���� �������嬳��������������������������������������������Р������������������������������������������������������Π���묳����������������������������������������̠����������嬱��������������������������������������������������������������������������������������������Ԡ�������������묳��������������������������������������������Π�����������󬹲�������������������������������������������à����嬲����������������������������������������������� ���������������󬱲����������������������������������������͠���������������󬴹��������������������������������������������Ϡ�������嬲��������������������������������������������Ǡ����򬲸�������������������������������������������Ԡ����������᬴������������������������������������������������͠�����������󬴸������������������������������������������͠��������묲������������������������������������������à������󬴰�����������������������������������������������������󬳸�������������������������������������������à������󬹵������������������������������������������Ҡ��������嬲����������������������������������������������Р�������󬲸�������������������������������������������Ƞ�����嬳��������������������������������������������� ���������嬲������������������������������������������������ɠ�������무��������������������������������������������Р�����������󬲶��������������������������������������������Ӡ����������������������������������������������������Ƞ����������������������������������������������������Ҡ�������������������������������������������������Р���������������������������������������������������������Ġ�������������������������������������������������������Р���������������������������������������������������ʠ������鬳�������������������������������������������Ҡ���������������������������������������������
+\ No newline at end of file
+Index: model/donation.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- model/donation.go	(date 1606696866641)
++++ model/donation.go	(date 1606696866641)
+@@ -0,0 +1,41 @@
++// Package model contains structs used by the service to store and handle data
++package model
++
++import (
++	"fmt"
++	"strconv"
++	"time"
++)
++
++// Donation represents a row in the CSV file, representing a donation
++type Donation struct {
++	Name            string
++	AmountSubunits  int64
++	CCNumber        string
++	CVV             string
++	ExpirationMonth time.Month
++	ExpirationYear  int
++}
++
++// NewDonation creates and returns a new Donation
++func NewDonation(name, amount, ccNumber, cvv, expMonth, expYear string) Donation {
++	amt, _ := strconv.ParseInt(amount, 10, 64)
++	m, _ := strconv.Atoi(expMonth)
++	em := time.Month(m)
++	ey, _ := strconv.Atoi(expYear)
++
++	return Donation{
++		Name:            name,
++		AmountSubunits:  amt,
++		CCNumber:        ccNumber,
++		CVV:             cvv,
++		ExpirationMonth: em,
++		ExpirationYear:  ey,
++	}
++}
++
++// ToString returns a debug string of the Donation's data
++func (d Donation) ToString() string {
++	res := fmt.Sprintf("Donation - [Donor = [%s], amount = [%d], CCNumber = [%s], CVV = [%s], expiration = [%d/%d]", d.Name, d.AmountSubunits, d.CCNumber, d.CVV, d.ExpirationMonth, d.ExpirationYear)
++	return res
++}
+Index: http/doc.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- http/doc.go	(date 1606698084389)
++++ http/doc.go	(date 1606698084389)
+@@ -0,0 +1,14 @@
++// Package http contains code that calls the API for Omise
++//
++// The usage of this API is using test credentials: any requests are made on a test environment
++// and no real transactions are created. Because these are test credentials, and this code is
++// not meant to be used for commercial or real-world use, these credentials are hard-coded for
++// the sake of the exercise. If in production, these credentials should be pulled from the environment
++// for security's sake.
++//
++// omise contains the main API code, with interfaces and functions used to call the Omise API descirbed here
++//
++// https://www.omise.co/charges-api
++//
++// https://www.omise.co/cards-api
++package http
+Index: cipher/doc.go
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- cipher/doc.go	(date 1606696149961)
++++ cipher/doc.go	(date 1606696149961)
+@@ -0,0 +1,14 @@
++// Package cipher implements struct and functions with relation to the decryption/encryption of files
++//
++// cipher implements a simple Caesar Cipher, where the cipher key is 128 rotation
++// the implementation is based on the code here
++//
++// https://play.golang.org/p/dCWYyWPHwj4
++//
++// decipher implements an interface to decipher files
++//
++// encipher implements an interface to encipher files
++// This is meant to be a helper interface, used during testing and validation
++//
++// rot128 is the implementation of the 128 Cipher
++package cipher
